@@ -1,0 +1,101 @@
+version: 2
+
+models:
+  - name: int_competitions
+    columns:
+      - name: competition_id
+        tests:
+          - not_null
+          - unique
+      - name: competition_name
+        tests:
+          - not_null
+
+  - name: int_matches
+    columns:
+      - name: match_id
+        tests:
+          - not_null
+          - unique
+      - name: competition_id
+        tests:
+          - not_null
+      - name: season_id
+        tests:
+          - not_null
+      - name: match_result
+        tests:
+          - accepted_values:
+              values: ["HOME_TEAM", "AWAY_TEAM", "DRAW"]
+
+  - name: int_player_team_season
+    columns:
+      - name: player_id
+        tests:
+          - not_null
+      - name: team_id
+        tests:
+          - not_null
+      - name: season_id
+        tests:
+          - not_null
+
+  - name: int_players
+    columns:
+      - name: player_id
+        tests:
+          - not_null
+          - unique
+      - name: player_name
+        tests:
+          - not_null
+
+  - name: int_referees
+    columns:
+      - name: match_id
+        tests:
+          - not_null
+      - name: refree_id
+        tests:
+          - not_null
+
+  - name: int_scorers
+    columns:
+      - name: competition_id
+        tests:
+          - not_null
+      - name: season_id
+        tests:
+          - not_null
+      - name: player_id
+        tests:
+          - not_null
+      - name: team_id
+        tests:
+          - not_null
+
+  - name: int_seasons
+    columns:
+      - name: season_id
+        tests:
+          - not_null
+          - unique
+
+  - name: int_standings
+    columns:
+      - name: competition_id
+        tests:
+          - not_null
+      - name: season_id
+        tests:
+          - not_null
+      - name: team_id
+        tests:
+          - not_null
+
+  - name: int_teams
+    columns:
+      - name: team_id
+        tests:
+          - not_null
+          - unique

@@ -1,0 +1,8 @@
+packages:
+  - name: dbt_utils
+    package: dbt-labs/dbt_utils
+    version: 1.4.1
+  - name: dbt_date
+    package: calogica/dbt_date
+    version: 0.9.1
+sha1_hash: 80d2d55a8551993b0ea8fa11d1de460aa076308c

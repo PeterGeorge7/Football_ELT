@@ -1,0 +1,9 @@
+sources:
+  - name: football
+    database: football_dwh  
+    schema: staging  
+    tables:
+      - name: scorers_raw
+      - name: matches_raw
+      - name: teams_raw
+      - name: standings_raw
