@@ -1,0 +1,206 @@
+version: 2
+
+models:
+  - name: dim_competitions
+    columns:
+      - name: competition_key
+        tests:
+          - not_null
+          - unique
+      - name: competition_id
+        tests:
+          - not_null
+          - unique
+      - name: competition_name
+        tests:
+          - not_null
+
+  - name: dim_date
+    columns:
+      - name: date_key
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_players
+    columns:
+      - name: player_key
+        tests:
+          - not_null
+          - unique
+      - name: player_id
+        tests:
+          - not_null
+          - unique
+      - name: player_name
+        tests:
+          - not_null
+
+  - name: dim_seasons
+    columns:
+      - name: season_key
+        tests:
+          - not_null
+          - unique
+      - name: season_id
+        tests:
+          - not_null
+          - unique
+      - name: season_year
+        tests:
+          - not_null
+
+  - name: dim_teams
+    columns:
+      - name: team_key
+        tests:
+          - not_null
+          - unique
+      - name: team_id
+        tests:
+          - not_null
+          - unique
+      - name: team_name
+        tests:
+          - not_null
+
+  - name: bridge_player_team_season
+    columns:
+      - name: player_team_season_key
+        tests:
+          - not_null
+          - unique
+      - name: player_key
+        tests:
+          - not_null
+      - name: team_key
+        tests:
+          - not_null
+      - name: season_key
+        tests:
+          - not_null
+      - name: competition_key
+        tests:
+          - not_null
+
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - player_key
+            - team_key
+            - season_key
+            - competition_key
+
+  - name: fct_matches
+    columns:
+      - name: match_key
+        tests:
+          - not_null
+          - unique
+      - name: match_id
+        tests:
+          - not_null
+          - unique
+      - name: competition_key
+        tests:
+          - not_null
+      - name: season_key
+        tests:
+          - not_null
+      - name: date_key
+        tests:
+          - not_null
+      - name: home_team_key
+        tests:
+          - not_null
+      - name: away_team_key
+        tests:
+          - not_null
+      - name: match_result
+        tests:
+          - accepted_values:
+              values: ["HOME_TEAM", "AWAY_TEAM", "DRAW"]
+
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "home_team_score >= 0 and away_team_score >= 0"
+
+  - name: fct_scorers
+    columns:
+      - name: player_key
+        tests:
+          - not_null
+      - name: team_key
+        tests:
+          - not_null
+      - name: season_key
+        tests:
+          - not_null
+      - name: competition_key
+        tests:
+          - not_null
+      - name: played_matches
+        tests:
+          - not_null
+      - name: goals
+        tests:
+          - not_null
+
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "played_matches >= 0 and goals >= 0 and assists >= 0 and penalties >= 0"
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "goals_and_assits_ratio IS NULL OR goals_and_assits_ratio >= 0"
+
+  - name: fct_standings
+    columns:
+      - name: team_key
+        tests:
+          - not_null
+      - name: competition_key
+        tests:
+          - not_null
+      - name: season_key
+        tests:
+          - not_null
+      - name: stage
+        tests:
+          - not_null
+      - name: type
+        tests:
+          - not_null
+      - name: played_games
+        tests:
+          - not_null
+      - name: points
+        tests:
+          - not_null
+      - name: goals_for
+        tests:
+          - not_null
+      - name: goals_against
+        tests:
+          - not_null
+      - name: goals_difference
+        tests:
+          - not_null
+
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - team_key
+            - competition_key
+            - season_key
+            - type
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "goals_difference = (goals_for - goals_against)"
+
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "played_games >= 0 and won >= 0 and draw >= 0 and lost >= 0 and points >= 0 and goals_for >= 0 and goals_against >= 0"
