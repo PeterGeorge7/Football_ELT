@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from time import sleep
 from airflow.decorators import dag, task
 from airflow.sensors.base import PokeReturnValue
+import pendulum
 import requests
 import json
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -55,9 +56,11 @@ def elt_football_v1():
 
     # extract data from api for the topic needed and put it into bronze bucket
     @task(pool="api_pool")
-    def get_data(topic: str, season: str):
+    def get_data(topic: str, logical_date=None):
 
         url = f"{base_url}{topic}"
+
+        season = logical_date.year
 
         params = {"season": season, "limit": 500}
 
