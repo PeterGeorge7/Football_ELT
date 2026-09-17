@@ -89,12 +89,13 @@ LEFT JOIN team_players AS sq
     ON pts.player_id = sq.player_id
     AND pts.team_id = sq.team_id
     AND pts.season_id = sq.season_id
+    AND pts.competition_id = sq.competition_id
 
 LEFT JOIN scorer_players AS sr
     ON pts.player_id = sr.player_id
     AND pts.team_id = sr.team_id
     AND pts.season_id = sr.season_id
-
+    AND pts.competition_id = sr.competition_id
 
 
 

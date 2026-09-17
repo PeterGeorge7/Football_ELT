@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import sleep
 from airflow.decorators import dag, task
 from airflow.sensors.base import PokeReturnValue
@@ -7,6 +7,7 @@ import requests
 import json
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+import yaml
 
 base_url = "http://api.football-data.org/v4/"
 
@@ -14,8 +15,22 @@ HEADERS = {"X-Auth-Token": os.getenv("X-Auth-Token")}
 
 BUCKET_NAME = "bronze"
 
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
 
-@dag(start_date=datetime(2026, 1, 1), schedule=None, catchup=False)
+with open(CONFIG_PATH, "r") as conf_file:
+    config = yaml.safe_load(conf_file)
+
+
+@dag(
+    start_date=datetime(2026, 1, 1),
+    schedule="@monthly",
+    catchup=False,
+    default_args={
+        "owner": "football_team",
+        "retries": 2,
+        "retry_delay": timedelta(minutes=1),
+    },
+)
 def elt_football_v1():
 
     # sensor to check availability of the api and if it get the limit
@@ -38,10 +53,12 @@ def elt_football_v1():
 
         response.raise_for_status()
 
+    # extract data from api for the topic needed and put it into bronze bucket
     @task(pool="api_pool")
     def get_data(topic: str, season: str):
 
         url = f"{base_url}{topic}"
+
         params = {"season": season, "limit": 500}
 
         start, league, final = topic.split("/")
@@ -146,7 +163,8 @@ def elt_football_v1():
                 dbt build --profiles-dir /usr/local/airflow/dbt/profiles --project-dir /usr/local/airflow/dbt/football 
                 """
 
-    competitions = ["PL", "SA", "BL1", "FL1", "PD"]
+    competitions = [competition for competition in config["competitions"]]
+    seasons = [season for season in config["seasons"]]
 
     merged_topics = [
         [
@@ -160,18 +178,11 @@ def elt_football_v1():
 
     topics = [item for sublist in merged_topics for item in sublist]
 
-    # pl_topics = [
-    #     "competitions/PL/standings",
-    #     "competitions/PL/matches",
-    #     "competitions/PL/scorers",
-    #     "competitions/PL/teams",
-    # ]
-
     check = check_api_available()
 
     metadata = get_data.expand(
         topic=topics,
-        season=["2023", "2024", "2025", "2026"],
+        season=seasons,
     )
 
     staging_load = staging_loader.expand(metadata=metadata)
