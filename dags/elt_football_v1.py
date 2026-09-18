@@ -23,7 +23,7 @@ with open(CONFIG_PATH, "r") as conf_file:
 
 
 @dag(
-    start_date=datetime(2026, 1, 1),
+    start_date=datetime(2023, 1, 1),
     schedule="@monthly",
     catchup=False,
     default_args={
@@ -53,6 +53,10 @@ def elt_football_v1():
             return PokeReturnValue(is_done=False)
 
         response.raise_for_status()
+
+    @task
+    def check_staging_schema():
+        hook = PostgresHook(postgres_conn_id="app_db_conn")
 
     # extract data from api for the topic needed and put it into bronze bucket
     @task(pool="api_pool")
@@ -183,10 +187,7 @@ def elt_football_v1():
 
     check = check_api_available()
 
-    metadata = get_data.expand(
-        topic=topics,
-        season=seasons,
-    )
+    metadata = get_data.expand(topic=topics)
 
     staging_load = staging_loader.expand(metadata=metadata)
 
