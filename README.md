@@ -164,6 +164,11 @@ cd dbt/football
 dbt build --profiles-dir profiles --project-dir .
 ```
 
+
+## Architecture
+
+See the [Staging Database Contract](docs/staging_contracts.md).
+
 ## Local Setup
 
 ### Prerequisites
@@ -204,6 +209,7 @@ Configure the following Airflow connections and values in the local Airflow envi
 | `api_pool`     | An Airflow pool used by the mapped API extraction tasks.                                      |
 
 The local connection, pool, and variable template is [`airflow_settings.yaml`](airflow_settings.yaml). Keep tokens and passwords out of source control.
+
 
 ### Run the pipeline
 
