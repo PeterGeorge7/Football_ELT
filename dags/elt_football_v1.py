@@ -8,6 +8,7 @@ import json
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 import yaml
+import pendulum
 
 base_url = "http://api.football-data.org/v4/"
 
@@ -22,8 +23,8 @@ with open(CONFIG_PATH, "r") as conf_file:
 
 
 @dag(
-    start_date=datetime(2026, 1, 1),
-    schedule="@monthly",
+    start_date=pendulum.datetime(2026, 1, 1, tz="Africa/Cairo"),
+    schedule="0 6 * * *",
     catchup=False,
     default_args={
         "owner": "football_team",
