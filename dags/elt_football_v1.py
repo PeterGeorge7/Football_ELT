@@ -55,10 +55,6 @@ def elt_football_v1():
 
         response.raise_for_status()
 
-    @task
-    def check_staging_schema():
-        hook = PostgresHook(postgres_conn_id="app_db_conn")
-
     # extract data from api for the topic needed and put it into bronze bucket
     @task(pool="api_pool")
     def get_data(topic: str, logical_date=None):
