@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from time import sleep
 from airflow.decorators import dag, task
+from airflow.exceptions import AirflowException, AirflowFailException
 from airflow.sensors.base import PokeReturnValue
 import pendulum
 import requests
@@ -13,51 +14,33 @@ import pendulum
 
 base_url = "http://api.football-data.org/v4/"
 
-HEADERS = {"X-Auth-Token": os.getenv("X-Auth-Token")}
-
 BUCKET_NAME = "bronze"
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
 
-with open(CONFIG_PATH, "r") as conf_file:
-    config = yaml.safe_load(conf_file)
-
-
+# for the first run only it would be schedule yearly, with start date of 2023
 @dag(
     start_date=pendulum.datetime(2026, 1, 1, tz="Africa/Cairo"),
     schedule="0 6 * * *",
     catchup=False,
     default_args={
         "owner": "football_team",
-        "retries": 2,
-        "retry_delay": timedelta(minutes=1),
+        "retries": 3,
+        "retry_delay": timedelta(seconds=30),
+        "retry_exponential_backoff": True,
+        "max_retry_delay": timedelta(minutes=2),
     },
 )
 def elt_football_v1():
 
-    # sensor to check availability of the api and if it get the limit
-    @task.sensor(poke_interval=30, timeout=600, mode="reschedule")
-    def check_api_available() -> PokeReturnValue:
-        response = requests.get(f"{base_url}competitions", headers=HEADERS)
-
-        if response.status_code == 200:
-            return PokeReturnValue(is_done=True)
-
-        if response.status_code == 429:
-            reset_seconds = int(response.headers.get("X-RequestCounter-Reset", 10))
-
-            print(
-                f"Rate limit reached. API counter resets in "
-                f"{reset_seconds} seconds."
-            )
-
-            return PokeReturnValue(is_done=False)
-
-        response.raise_for_status()
-
     # extract data from api for the topic needed and put it into bronze bucket
     @task(pool="api_pool")
     def get_data(topic: str, logical_date=None):
+        API_TOKEN = os.getenv("X-Auth-Token")
+
+        if not API_TOKEN:
+            raise AirflowFailException(f"API Token enviromnet variable is missing")
+
+        headers = {"X-Auth-Token": API_TOKEN}
 
         url = f"{base_url}{topic}"
 
@@ -69,7 +52,7 @@ def elt_football_v1():
 
         s3_key = f"{league}/{season}/{league}_{final}_{season}.json"
 
-        response = requests.get(url, headers=HEADERS, params=params, timeout=30)
+        response = requests.get(url, headers=headers, params=params, timeout=30)
 
         print(f"Request URL: {response.url}")
         print(f"Status code: {response.status_code}")
@@ -79,18 +62,47 @@ def elt_football_v1():
         )
         print(f"Counter reset: " f"{response.headers.get('X-RequestCounter-Reset')}")
 
-        if response.status_code == 429:
-            reset_seconds = int(response.headers.get("X-RequestCounter-Reset", 10))
+        # Success
+        if response.status_code == 200:
+            # check for the json file
+            try:
+                data = (
+                    response.json()
+                )  # this will raise "requests.exceptions.JSONDecodeError" if there is issue
+            except json.JSONDecodeError as exc:
+                raise AirflowFailException(
+                    f"Invalid returned JSON "
+                    f"url={response.url} "
+                    f"response={response.text[:500]}"
+                ) from exc
 
-            print(f"Going to sleep {reset_seconds + 1} and make request.")
+        # config or auth problems
+        elif response.status_code in (400, 401, 403, 404):
+            raise AirflowFailException(
+                f"API request failed with HTTP "
+                f"{response.status_code} "
+                f"{response.text[:500]}"
+            )
 
-            sleep(reset_seconds + 1)
+        # limit reached
+        elif response.status_code == 429:
+            reset_seconds = response.headers.get("X-RequestCounter-Reset", "unknown")
+            raise AirflowException(
+                f"API limit reached " f"will reset in {reset_seconds} sec"
+            )
 
-            response = requests.get(url, headers=HEADERS, params=params, timeout=30)
+        # server side errors
+        elif 500 <= response.status_code <= 599:
+            raise AirflowException(
+                f"API server error " f"{response.status_code} " f"{response.text[:500]}"
+            )
 
-        response.raise_for_status()
-
-        data = response.json()
+        else:
+            raise AirflowFailException(
+                f"unexpected API response "
+                f"{response.status_code} "
+                f"{response.text[:500]}"
+            )
 
         S3Hook(aws_conn_id="minio_conn").load_string(
             string_data=json.dumps(data),
@@ -102,8 +114,6 @@ def elt_football_v1():
         print(
             f"Successfully uploaded {s3_key} to S3-compatible bucket '{BUCKET_NAME}'."
         )
-
-        sleep(7)  # between api requests
 
         return {
             "bucket": "bronze",
@@ -167,6 +177,14 @@ def elt_football_v1():
                 dbt build --profiles-dir /usr/local/airflow/dbt/profiles --project-dir /usr/local/airflow/dbt/football 
                 """
 
+    ################################
+    ################################
+
+    CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
+
+    with open(CONFIG_PATH, "r") as conf_file:
+        config = yaml.safe_load(conf_file)
+
     competitions = [competition for competition in config["competitions"]]
     seasons = [season for season in config["seasons"]]
 
@@ -182,15 +200,13 @@ def elt_football_v1():
 
     topics = [item for sublist in merged_topics for item in sublist]
 
-    check = check_api_available()
-
     metadata = get_data.expand(topic=topics)
 
     staging_load = staging_loader.expand(metadata=metadata)
 
     build_dbt = dbt_build()
 
-    check >> metadata >> staging_load >> build_dbt
+    metadata >> staging_load >> build_dbt
 
 
 elt_football_v1()
