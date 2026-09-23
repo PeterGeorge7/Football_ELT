@@ -1,35 +1,23 @@
 # Football Data Engineering Project
 
-An end-to-end football analytics platform that collects competition data from the Football Data API, stores the original responses, transforms them into an analytics-ready warehouse, and exposes the resulting model for dashboards.
+An end-to-end football analytics platform that extracts competition data from the Football Data API, stores the latest raw responses in MinIO, loads JSONB staging tables in PostgreSQL, transforms the data with dbt, and exposes dimensional marts for Power BI.
 
 ## Project Diagram
 
-```mermaid
-flowchart LR
-	A[Football Data API] --> B[Airflow sensor]
-	B --> C[Dynamic mapped API tasks]
-	C --> D[(MinIO bronze bucket)]
-	D --> E[Airflow staging loader]
-	E --> F[(PostgreSQL staging schema)]
-	F --> G[dbt intermediate models]
-	G --> H[dbt dimensional marts]
-	H --> I[Power BI dashboard]
-
-	J[API pool and rate-limit handling] -. controls .-> C
-	K[dbt tests] -. validates .-> H
-```
+![Football project architecture](Dashboards/screenshots/Project-Digram.png)
 
 ## Overview
 
-This project is an ELT pipeline for football competitions and seasons. It currently targets five competitions:
+This project is an ELT pipeline for football competitions and seasons. The extraction configuration currently includes six competitions:
 
-| Competition code | Competition    |
-| ---------------- | -------------- |
-| `PL`             | Premier League |
-| `SA`             | Serie A        |
-| `BL1`            | Bundesliga     |
-| `FL1`            | Ligue 1        |
-| `PD`             | La Liga        |
+| Competition code | Competition           |
+| ---------------- | --------------------- |
+| `PL`             | Premier League        |
+| `SA`             | Serie A               |
+| `BL1`            | Bundesliga            |
+| `FL1`            | Ligue 1               |
+| `PD`             | La Liga               |
+| `CL`             | UEFA Champions League |
 
 For each competition and season, the pipeline requests four resources:
 
@@ -38,13 +26,13 @@ For each competition and season, the pipeline requests four resources:
 - scorers
 - teams
 
-The raw API payload is kept in MinIO before it is loaded into PostgreSQL. This preserves the source response and makes the transformation layer reproducible. dbt then converts the semi-structured JSONB staging data into relational intermediate models and a dimensional warehouse suitable for analysis in Power BI.
+The raw API payload is written to MinIO before it is loaded into PostgreSQL. Version 1 keeps the latest response for each competition, season, and resource key; it does not retain historical API snapshots. dbt then converts the semi-structured JSONB staging data into relational intermediate models and dimensional marts suitable for analysis in Power BI.
 
 ## Tools Used
 
 | Tool                                                                                                            | Role in the project                                                         |
 | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| ![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-017CEE?logo=apacheairflow&logoColor=white)      | Orchestrates the sensor, API extraction, staging load, and dbt build tasks. |
+| ![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-017CEE?logo=apacheairflow&logoColor=white)      | Orchestrates API extraction, staging load, retries, and the dbt build task. |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)                               | Implements API extraction and data-loading tasks.                           |
 | ![Football Data API](https://img.shields.io/badge/Football%20Data%20API-1F2937?logo=databricks&logoColor=white) | Supplies competition, match, team, standings, and scorer data.              |
 | ![MinIO](https://img.shields.io/badge/MinIO-C72E49?logo=minio&logoColor=white)                                  | Provides S3-compatible object storage for the bronze layer.                 |
@@ -57,12 +45,13 @@ The raw API payload is kept in MinIO before it is loaded into PostgreSQL. This p
 
 ### 1. Extract
 
-The main DAG in [`dags/elt_football_v1.py`](dags/elt_football_v1.py) first checks whether the API is available. It then creates one mapped task for every competition-resource-season combination. With five competitions, four resources, and four configured seasons, the DAG can create 80 extraction tasks.
+The main DAG in [`dags/elt_football_v1.py`](dags/elt_football_v1.py) creates mapped extraction tasks for the configured competitions and four API resources: standings, matches, scorers, and teams. The task uses the DAG logical date as the requested season. The `dags/config/config.yaml` file currently lists historical seasons for future multi-season mapping, but those values are not yet passed into task mapping.
 
 The extractor also:
 
 - sends the API token through the `X-Auth-Token` header;
-- detects HTTP 429 responses and waits for the advertised reset interval;
+- classifies authentication, client, rate-limit, server, and unexpected responses;
+- retries rate-limit, server, timeout, and connection failures through Airflow;
 - limits API concurrency through the Airflow `api_pool`;
 - writes each response to a predictable object-storage key;
 - records metadata such as competition, season, resource, bucket, and object key.
@@ -96,7 +85,7 @@ The main dbt models include:
 - bridge table: player-team-season relationships;
 - facts: matches, scorers, and standings.
 
-The date dimension uses the [`dbt_date`](dbt/football/dbt_packages/dbt_date) package, while [`dbt_utils`](dbt/football/dbt_packages/dbt_utils) provides reusable data tests.
+The date dimension uses the [`dbt_date`](dbt/football/dbt_packages/dbt_date) package, while [`dbt_utils`](dbt/football/dbt_packages/dbt_utils) provides reusable data tests. The staging contract is documented in [`docs/staging_contracts.md`](docs/staging_contracts.md), and the API response policy is documented in [`docs/api_failure_policy.md`](docs/api_failure_policy.md).
 
 ## Warehouse Model
 
@@ -120,10 +109,10 @@ These are the decisions that make the project more reliable and more useful than
 
 | Decision                                      | Why it matters                                                                                                                              |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bronze object storage before database loading | Keeps an immutable-ish copy of the source response and separates extraction failures from transformation failures.                          |
+| Bronze object storage before database loading | Separates extraction failures from transformation failures and keeps the latest source response outside the warehouse.                      |
 | Dynamic task mapping                          | Generates extraction tasks from the competition, resource, and season lists instead of duplicating task definitions by hand.                |
-| API availability sensor                       | Prevents the extraction fan-out from starting when the upstream API is unavailable.                                                         |
-| Rate-limit-aware extraction                   | Reads the API reset header and waits before retrying, reducing avoidable request failures.                                                  |
+| Explicit API failure policy                   | Distinguishes failures that should stop immediately from failures that should be retried by Airflow.                                        |
+| Airflow retry and backoff policy              | Retries transient rate-limit, server, timeout, and connection failures without retrying authentication or invalid-request failures.         |
 | Airflow pool for API calls                    | Controls concurrency and protects the upstream service from a burst of requests.                                                            |
 | JSONB staging                                 | Retains nested source data while allowing PostgreSQL to store and query the raw payload efficiently.                                        |
 | Upsert by source file                         | Makes repeated runs idempotent for an already extracted competition, season, and resource.                                                  |
@@ -164,11 +153,6 @@ cd dbt/football
 dbt build --profiles-dir profiles --project-dir .
 ```
 
-
-## Architecture
-
-See the [Staging Database Contract](docs/staging_contracts.md).
-
 ## Local Setup
 
 ### Prerequisites
@@ -181,9 +165,16 @@ See the [Staging Database Contract](docs/staging_contracts.md).
 
 ### Start the local services
 
-The project starts PostgreSQL and MinIO with [`docker-compose.override.yml`](docker-compose.override.yml):
+The project starts PostgreSQL and MinIO with [`docker-compose.override.yml`](docker-compose.override.yml). PostgreSQL runs the initialization script at [`docker/postgres/init/01_create_staging.sql`](docker/postgres/init/01_create_staging.sql) when the database volume is created:
 
 ```powershell
+docker compose up -d
+```
+
+For a clean local bootstrap, where existing local database data can be discarded:
+
+```powershell
+docker compose down -v
 docker compose up -d
 ```
 
@@ -210,7 +201,6 @@ Configure the following Airflow connections and values in the local Airflow envi
 
 The local connection, pool, and variable template is [`airflow_settings.yaml`](airflow_settings.yaml). Keep tokens and passwords out of source control.
 
-
 ### Run the pipeline
 
 1. Start the local services and Airflow environment.
@@ -222,9 +212,11 @@ The local connection, pool, and variable template is [`airflow_settings.yaml`](a
 
 The older [`dags/elt_football.py`](dags/elt_football.py) DAG is retained as an earlier extraction approach. [`dags/elt_football_v1.py`](dags/elt_football_v1.py) is the more complete version because it includes staging and dbt transformation tasks.
 
-## Dashboard
+## Power BI Dashboard
 
-The Power BI file is available at [`Dashboards/dashboard.pbix`](Dashboards/dashboard.pbix). The intended dashboard can answer questions such as:
+The Power BI report is available at [`Dashboards/Football-dashboard.pbix`](Dashboards/Football-dashboard.pbix). It is connected to the dimensional marts produced by dbt and supports analysis of competitions, seasons, teams, matches, standings, and player performance.
+
+The dashboard can answer questions such as:
 
 - Which teams lead a competition in points and goal difference?
 - How do home and away results compare?
@@ -232,16 +224,37 @@ The Power BI file is available at [`Dashboards/dashboard.pbix`](Dashboards/dashb
 - How do team and player performance change between seasons?
 - Which players are associated with multiple teams across the available seasons?
 
-### Dashboard Screenshot Locations
+### Dashboard Screenshots
 
-Add exported dashboard screenshots to `Dashboards/screenshots/` using these names. The links are intentionally ready for the screenshots to be added later.
+#### Dashboard Overview
 
-| View                       | Screenshot                                                                 |
-| -------------------------- | -------------------------------------------------------------------------- |
-| Dashboard overview         | ![Dashboard overview](Dashboards/screenshots/dashboard-overview.png)       |
-| Competition standings      | ![Competition standings](Dashboards/screenshots/competition-standings.png) |
-| Match performance          | ![Match performance](Dashboards/screenshots/match-performance.png)         |
-| Player and scorer analysis | ![Player and scorer analysis](Dashboards/screenshots/player-scorers.png)   |
+![Dashboard overview](Dashboards/screenshots/dashboard-overview.png)
+
+The overview page summarizes played matches, goals, average goals per match, players, teams, goals by matchday, and goals by team.
+
+#### Competition Standings
+
+![Competition standings](Dashboards/screenshots/Competition-standings.png)
+
+The standings page provides team-level wins, draws, losses, goals, points, position, and selected team details.
+
+#### Team Performance
+
+![Team performance](Dashboards/screenshots/Team-Performance.png)
+
+The team page compares results, scores, positions across seasons, and match history for a selected team.
+
+#### Player Performance
+
+![Player performance](Dashboards/screenshots/Player-Perfromance.png)
+
+The player page presents goals, assists, contribution per match, competition history, and squad performance.
+
+### Power BI Data Model
+
+![Power BI data model](Dashboards/screenshots/Data-Model.png)
+
+The model uses shared dimensions for competitions, dates, players, seasons, and teams. Fact tables contain matches, standings, scorers, and team-match analysis, while `bridge_player_team_season` represents player membership across teams, seasons, and competitions.
 
 ## Repository Structure
 
@@ -254,7 +267,7 @@ Add exported dashboard screenshots to `Dashboards/screenshots/` using these name
 |   |-- models/marts/            # Dimensions, bridge, and fact tables
 |   |-- tests/                  # dbt schema and data tests
 |   `-- profiles/               # Local dbt profile configuration
-|-- Dashboards/                 # Power BI report and future screenshots
+|-- Dashboards/                 # Power BI report and dashboard screenshots
 |-- minio_test/                 # Example API payloads
 |-- docker-compose.override.yml # Local PostgreSQL and MinIO services
 |-- Dockerfile                  # Airflow runtime image
@@ -262,10 +275,12 @@ Add exported dashboard screenshots to `Dashboards/screenshots/` using these name
 `-- Learned.md                  # Topics learned during development
 ```
 
-## Future Improvements
+## Current Limitations and Next Improvements
 
+- Pass configured seasons into the mapped extraction tasks so historical seasons are loaded deliberately rather than deriving one season from the DAG logical date.
 - Add incremental loading and a formal extraction audit table.
 - Move API credentials and local connection values into a secrets manager for deployed environments.
 - Add freshness and source-volume tests to the dbt project.
 - Add automated tests for API rate-limit and retry behavior.
-- Add dashboard screenshots and publish a documented Power BI data-source configuration.
+- Add relationship tests and explicit uniqueness tests for every fact-table grain.
+- Add a documented Power BI data-source configuration.
