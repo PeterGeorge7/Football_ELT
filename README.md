@@ -4,7 +4,7 @@ An end-to-end football analytics platform that extracts competition data from th
 
 ## Project Diagram
 
-![Football project architecture](Dashboards/screenshots/Project-Digram.png)
+![Football project architecture](Project-Diagram.png)
 
 ## Overview
 
